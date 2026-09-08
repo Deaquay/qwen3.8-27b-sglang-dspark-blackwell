@@ -14,7 +14,9 @@
 # comes from block-size 7 + 98.5% VRAM (no vision). Cutting ctx is a VRAM-cost
 # effect, not a speed cause — you only cut ctx to fit the vision tower.
 #
-# Usage:  ./run-sglang-vision.sh [start|stop|logs|status]
+# Usage:  ./run-sglang-vision.sh [start|stop|logs|status] [--no-monitoring]
+#          (start also brings up ./monitor.sh — Grafana/Prometheus/Caddy/DCGM —
+#          unless --no-monitoring is passed)
 # API:     http://localhost:${HOST_PORT}/v1   (also /anthropic)
 set -uo pipefail
 
@@ -133,6 +135,12 @@ start() {
   echo "Container started. First boot loads ~18 GB + vision tower + drafter (~30 GB)."
   echo "  If it OOMs at boot: lower --mem-fraction-static to 0.80 and --context-length to ~120000, then re-run."
   echo "Watch readiness: ./run-sglang-vision.sh status"
+  if [ "$MONITORING" -eq 1 ]; then
+    echo "Starting monitoring stack (./monitor.sh up) ..."
+    "$DIR/monitor.sh" up || echo "WARNING: monitoring failed to start — the SGLang server itself is unaffected."
+  else
+    echo "Monitoring: skipped (--no-monitoring). Start it later: ./monitor.sh up"
+  fi
 }
 
 stop()  { podman rm -f "$CONTAINER" >/dev/null 2>&1 && echo "stopped" || echo "not running"; }
@@ -145,10 +153,22 @@ status(){
   echo "--- gpu ---"; nvidia-smi --query-gpu=memory.used,memory.total,utilization.gpu --format=csv,noheader 2>/dev/null || true
 }
 
-case "${1:-start}" in
+# --no-monitoring: skip auto-starting the monitoring stack (default: on).
+MONITORING=1
+for a in "$@"; do
+  case "$a" in
+    --no-monitoring) MONITORING=0 ;;
+    -*) echo "unknown flag: $a"; exit 2 ;;
+  esac
+done
+CMD="start"
+for a in "$@"; do
+  case "$a" in -*) ;; *) CMD="$a"; break ;; esac
+done
+case "$CMD" in
   start) start ;;
   stop)  stop ;;
   logs)  logs ;;
   status) status ;;
-  *) echo "usage: $0 [start|stop|logs|status]"; exit 2 ;;
+  *) echo "usage: $0 [start|stop|logs|status] [--no-monitoring]"; exit 2 ;;
 esac
